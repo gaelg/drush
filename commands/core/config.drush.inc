@@ -10,6 +10,7 @@ use Drupal\Core\Config\StorageComparer;
 use Drupal\Core\Config\ConfigImporter;
 use Drupal\Core\Config\ConfigException;
 use Drupal\Core\Config\FileStorage;
+use Drupal\Core\Config\StorageInterface;
 use Drush\Config\StorageWrapper;
 use Drush\Config\CoreExtensionFilter;
 use Symfony\Component\Yaml\Parser;
@@ -442,6 +443,12 @@ function _drush_config_export($destination, $destination_dir, $branch) {
       }
     }
 
+    $module_adjustments = drush_get_option('skip-modules');
+    if (!empty($module_adjustments)) {
+      // Ignore configs depending on excluded modules.
+      $comparison_source = _drush_config_filter_out_dependent_configs($comparison_source, $target_storage, $module_adjustments);
+    }
+
     $config_comparer = new StorageComparer($comparison_source, $target_storage, Drupal::service('config.manager'));
     if (!$config_comparer->createChangelist()->hasChanges()) {
       return drush_log(dt('There are no changes to export.'), LogLevel::OK);
@@ -472,6 +479,11 @@ function _drush_config_export($destination, $destination_dir, $branch) {
   // Write all .yml files.
   $source_storage = Drupal::service('config.storage');
   $destination_storage = new FileStorage($destination_dir);
+  $module_adjustments = drush_get_option('skip-modules');
+  if (!empty($module_adjustments)) {
+    // Ignore configs depending on excluded modules.
+    $source_storage = _drush_config_filter_out_dependent_configs($source_storage, $destination_storage, $module_adjustments);
+  }
   // If there are any filters, then attach them to the destination storage
   if (!empty($storage_filters)) {
     $destination_storage = new StorageWrapper($destination_storage, $storage_filters);
@@ -594,6 +606,13 @@ function drush_config_import($source = NULL) {
   $source_storage = new FileStorage($source_dir);
   /** @var \Drupal\Core\Config\StorageInterface $active_storage */
   $active_storage = Drupal::service('config.storage');
+
+  $module_adjustments = drush_get_option('skip-modules');
+  if (!empty($module_adjustments)) {
+    // Ignore configs depending on excluded modules.
+    $source_storage = _drush_config_filter_out_dependent_configs($source_storage, $active_storage, $module_adjustments);
+  }
+
   // If our configuration storage is being filtered, then attach all filters
   // to the source storage object.  We will use the filtered values uniformly
   // for comparison, full imports, and partial imports.
@@ -613,6 +632,7 @@ function drush_config_import($source = NULL) {
     }
     $active_storage = $temp_active_storage;
   }
+
   $config_comparer = new StorageComparer($source_storage, $active_storage, Drupal::service('config.manager'));
   if (!$config_comparer->createChangelist()->hasChanges()) {
     return drush_log(dt('There are no changes to import.'), LogLevel::OK);
@@ -641,6 +661,47 @@ function drush_config_import($source = NULL) {
     }
     return drush_op('_drush_config_import', $config_comparer);
   }
+}
+
+function _drush_config_filter_out_dependent_configs(StorageInterface $source_storage, StorageInterface $destination_storage, $module_adjustments) {
+  // If some modules are ignored, we need to ignore the configs that depend
+  // on it, so that they remain as is if they existed in destination, and
+  // are not created if they did not exist.
+  if (is_string($module_adjustments)) {
+    $module_adjustments = explode(',', $module_adjustments);
+  }
+  $temp_source_storage = new FileStorage(drush_tempdir(), $source_storage->getCollectionName());
+  // Copy source storage to our temporary source store.
+  foreach ($source_storage->listAll() as $name) {
+    $temp_source_storage->write($name, $source_storage->read($name));
+  }
+  // Make dependent configs in temporary source reflect destination.
+  foreach ($module_adjustments as $module_name) {
+    $destination_dependencies = _drush_config_get_dependencies($module_name, $destination_storage);
+    $source_dependencies = _drush_config_get_dependencies($module_name, $source_storage);
+    $dependencies = array_unique(array_merge($destination_dependencies, $source_dependencies));
+    foreach ($dependencies as $name) {
+      if ($existing = $destination_storage->read($name)) {
+        $temp_source_storage->write($name, $existing);
+      }
+      else {
+        $temp_source_storage->delete($name);
+      }
+    }
+  }
+  return $temp_source_storage;
+}
+
+function _drush_config_get_dependencies($module_name, StorageInterface $storage) {
+  //TODO Find a better way to find dependencies. For example, system.menu.devel
+  // should be ignored when devel is ignored.
+  $dependencies = array();
+  foreach($storage->listAll() as $name) {
+    if (preg_match('/^'.$module_name.'\./', $name)) {
+      $dependencies[] = $name;
+    }
+  }
+  return $dependencies;
 }
 
 // Copied from submitForm() at /core/modules/config/src/Form/ConfigSync.php
