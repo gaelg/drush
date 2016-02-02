@@ -482,7 +482,13 @@ function _drush_config_export($destination, $destination_dir, $branch) {
   $module_adjustments = drush_get_option('skip-modules');
   if (!empty($module_adjustments)) {
     // Ignore configs depending on excluded modules.
-    $source_storage = _drush_config_filter_out_dependent_configs($source_storage, $destination_storage, $module_adjustments);
+    if (!isset($comparison_source)) {
+      // Destination was empty before export. But we still need to avoid
+      // creating ignored configs.
+      $comparison_source = $destination_storage;
+    }
+    // Else, we'll write again the ignored configs which existed in destination.
+    $source_storage = _drush_config_filter_out_dependent_configs($source_storage, $comparison_source, $module_adjustments);
   }
   // If there are any filters, then attach them to the destination storage
   if (!empty($storage_filters)) {
