@@ -676,32 +676,75 @@ function _drush_config_filter_out_dependent_configs(StorageInterface $source_sto
     $temp_source_storage->write($name, $source_storage->read($name));
   }
   // Make dependent configs in temporary source reflect destination.
-  foreach ($module_adjustments as $module_name) {
-    $destination_dependencies = _drush_config_get_dependencies($module_name, $destination_storage);
-    $source_dependencies = _drush_config_get_dependencies($module_name, $source_storage);
-    $dependencies = array_unique(array_merge($destination_dependencies, $source_dependencies));
-    foreach ($dependencies as $name) {
-      if ($existing = $destination_storage->read($name)) {
-        $temp_source_storage->write($name, $existing);
-      }
-      else {
-        $temp_source_storage->delete($name);
-      }
+  $destination_dependencies = _drush_config_get_modules_dependent_configs($module_adjustments, $destination_storage);
+  $source_dependencies = _drush_config_get_modules_dependent_configs($module_adjustments, $source_storage);
+  $dependencies = array_unique(array_merge($destination_dependencies, $source_dependencies));
+  foreach ($dependencies as $name) {
+    if ($existing = $destination_storage->read($name)) {
+      $temp_source_storage->write($name, $existing);
+    }
+    else {
+      $temp_source_storage->delete($name);
     }
   }
+
   return $temp_source_storage;
 }
 
-function _drush_config_get_dependencies($module_name, StorageInterface $storage) {
-  //TODO Find a better way to find dependencies. For example, system.menu.devel
-  // should be ignored when devel is ignored.
-  $dependencies = array();
-  foreach($storage->listAll() as $name) {
-    if (preg_match('/^'.$module_name.'\./', $name)) {
-      $dependencies[] = $name;
+// Based on ConfigImportSubscriber::validateDependencies().
+//TODO This might be done in a better way by using ConfigDependencyManager.
+function _drush_config_get_modules_dependent_configs($module_names, StorageInterface $storage) {
+  // Find the configs which directly depend on the module.
+  $direct_dependent_configs = array();
+  foreach ($storage->listAll() as $config_name) {
+    // Configs depend on their owner.
+    list($owner,) = explode('.', $config_name, 2);
+    if (in_array($owner, $module_names)) {
+      $direct_dependent_configs[] = $config_name;
+      continue;
+    }
+    // Configs may depend on other modules.
+    $data = $storage->read($config_name);
+    if (
+      isset($data['dependencies']['module']) && !empty(array_intersect($module_names, $data['dependencies']['module']))
+      ||
+      isset($data['dependencies']['enforced']['module']) && !empty(array_intersect($module_names, $data['dependencies']['enforced']['module']))
+    ) {
+      $direct_dependent_configs[] = $config_name;
     }
   }
-  return $dependencies;
+  // Add the configs which depend on these dependent configs.
+  $dependent_configs = _drush_config_get_all_dependent_configs($direct_dependent_configs, $storage);
+  return $dependent_configs;
+}
+
+function _drush_config_get_all_dependent_configs($dependent_configs, StorageInterface $storage) {
+  $dependent_configs = array_unique($dependent_configs);
+  $to_be_checked = $dependent_configs;
+  while (!empty($to_be_checked)) {
+    // Find configs which directly depend on these configs.
+    $to_be_checked_afterwards = array();
+    foreach ($storage->listAll() as $config_name) {
+      if (in_array($config_name, $dependent_configs)) {
+        // This one is already known.
+        continue;
+      }
+      $data = $storage->read($config_name);
+      if (
+        isset($data['dependencies']['config']) && !empty(array_intersect($to_be_checked, $data['dependencies']['config']))
+        ||
+        isset($data['dependencies']['enforced']['config']) && !empty(array_intersect($to_be_checked, $data['dependencies']['config']))
+      ) {
+        // We add it at the end of the array, so that it's also checked
+        // afterwards.
+        $dependent_configs[] = $config_name;
+        // This config might already have dependent configs, so we'll check it.
+        $to_be_checked_afterwards[] = $config_name;
+      }
+    }
+    $to_be_checked = $to_be_checked_afterwards;
+  }
+  return $dependent_configs;
 }
 
 // Copied from submitForm() at /core/modules/config/src/Form/ConfigSync.php
