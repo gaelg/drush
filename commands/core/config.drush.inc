@@ -742,11 +742,17 @@ function _drush_config_get_all_dependent_configs($dependent_configs, StorageInte
         continue;
       }
       $data = $storage->read($config_name);
-      if (
-        isset($data['dependencies']['config']) && !empty(array_intersect($to_be_checked, $data['dependencies']['config']))
-        ||
-        isset($data['dependencies']['enforced']['config']) && !empty(array_intersect($to_be_checked, $data['dependencies']['config']))
-      ) {
+
+      $match = FALSE;
+      if (isset($data['dependencies']['config'])) {
+        $dependencies = array_intersect($to_be_checked, $data['dependencies']['config']);
+        $match = !empty($dependencies);
+      }
+      if (!$match && isset($data['dependencies']['enforced']['config'])) {
+        $dependencies = array_intersect($to_be_checked, $data['dependencies']['enforced']['config']);
+        $match = !empty($dependencies);
+      }
+      if ($match) {
         // We add it at the end of the array, so that it's also checked
         // afterwards.
         $dependent_configs[] = $config_name;
