@@ -711,11 +711,17 @@ function _drush_config_get_modules_dependent_configs($module_names, StorageInter
     }
     // Configs may depend on other modules.
     $data = $storage->read($config_name);
-    if (
-      isset($data['dependencies']['module']) && !empty(array_intersect($module_names, $data['dependencies']['module']))
-      ||
-      isset($data['dependencies']['enforced']['module']) && !empty(array_intersect($module_names, $data['dependencies']['enforced']['module']))
-    ) {
+
+    $match = FALSE;
+    if (isset($data['dependencies']['module'])) {
+      $dependencies = array_intersect($module_names, $data['dependencies']['module']);
+      $match = !empty($dependencies);
+    }
+    if (!$match && isset($data['dependencies']['enforced']['module'])) {
+      $dependencies = array_intersect($module_names, $data['dependencies']['enforced']['module']);
+      $match = !empty($dependencies);
+    }
+    if ($match) {
       $direct_dependent_configs[] = $config_name;
     }
   }
